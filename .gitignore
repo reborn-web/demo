@@ -1,17 +1,14 @@
-# Build outputs
 test
 *.o
 *.obj
 *.exe
 *.out
 
-# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -20,7 +17,6 @@ test
 ehthumbs.db
 Thumbs.db
 
-# Temporary files
 *.tmp
 *.temp
 *~
