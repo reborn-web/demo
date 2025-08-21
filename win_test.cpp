@@ -189,7 +189,7 @@ void consumer(int id) {
     while (running || has_unfinished_frames(id)) {
         auto start_time = std::chrono::steady_clock::now();
 
-        DWORD wait_result = WaitForSingleObject(filled_slots[id], 100);
+        DWORD wait_result = WaitForSingleObject(filled_slots[id], 10);
         if (wait_result != WAIT_OBJECT_0) {
             if (wait_result == WAIT_TIMEOUT) {
                 if (!running && producer_finished && !has_unfinished_frames(id)) {
