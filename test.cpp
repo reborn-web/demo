@@ -184,7 +184,7 @@ void consumer(int id) {
     while (running || has_unfinished_frames(id)) {
         auto start_time = std::chrono::steady_clock::now();
 
-        if (!filled_slots[id]->try_acquire_for(std::chrono::milliseconds(100))) {
+        if (!filled_slots[id]->try_acquire_for(std::chrono::milliseconds(10))) {
             if (!running && producer_finished && !has_unfinished_frames(id)) {
                 break;
             }
