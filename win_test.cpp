@@ -9,7 +9,7 @@
 #include <climits>
 #include <windows.h>
 
-const int BUFFER_SIZE = 10;
+const int BUFFER_SIZE = 16;
 const int NUM_CONSUMERS = 3;
 
 enum class ConsumerType {
@@ -29,7 +29,7 @@ struct Frame {
 
 std::array<Frame, BUFFER_SIZE> buffer;        
 std::atomic<int> in{0};
-std::atomic<int> out[NUM_CONSUMERS]{0,0,0};
+std::atomic<int> out[NUM_CONSUMERS];
 std::atomic<bool> running{true};
 std::atomic<bool> producer_finished{false};
 std::atomic<int> total_frames_produced{0};
@@ -161,20 +161,17 @@ void producer() {
 }
 
 bool has_unfinished_frames(int consumer_id) {
-    // If producer is still running, there might be more frames coming
     if (!producer_finished.load()) {
         return true;
     }
-    
-    // Only check if the current consumer has unfinished frames when producer stopped
+
     int total_produced = total_frames_produced.load();
     int current_consumer_position = out[consumer_id].load();
-    
-    // Only check if the current consumer has unfinished frames
+
     if (current_consumer_position < total_produced) {
         return true;
     }
-    
+
     return false;
 }
 
@@ -229,7 +226,6 @@ void consumer(int id) {
 }
 
 int main() {
-    // Initialize Windows semaphores
     empty_slots = CreateSemaphore(NULL, BUFFER_SIZE, BUFFER_SIZE, NULL);
     filled_slots_0 = CreateSemaphore(NULL, 0, BUFFER_SIZE, NULL);
     filled_slots_1 = CreateSemaphore(NULL, 0, BUFFER_SIZE, NULL);
@@ -243,6 +239,10 @@ int main() {
     filled_slots[0] = filled_slots_0;
     filled_slots[1] = filled_slots_1;
     filled_slots[2] = filled_slots_2;
+
+    for (int i = 0; i < NUM_CONSUMERS; ++i) {
+        out[i].store(0);
+    }
 
     std::thread producer_thread(producer);
     std::vector<std::thread> consumer_threads;
@@ -264,8 +264,7 @@ int main() {
 
     safe_print("Total frames produced: " + std::to_string(total_frames_produced.load()));
     safe_print("Total frames consumed: " + std::to_string(total_frames_consumed.load()));
-    
-    // Clean up Windows semaphores
+
     CloseHandle(empty_slots);
     CloseHandle(filled_slots_0);
     CloseHandle(filled_slots_1);

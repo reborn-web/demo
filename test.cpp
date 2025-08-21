@@ -9,7 +9,7 @@
 #include <mutex>
 #include <climits>
 
-const int BUFFER_SIZE = 10;
+const int BUFFER_SIZE = 16;
 const int NUM_CONSUMERS = 3;
 
 enum class ConsumerType {
