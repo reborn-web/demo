@@ -141,11 +141,11 @@ void producer() {
 
         int production_delay;
         if (frame_id % 10 == 0) {
-            production_delay = 30;
+            production_delay = 10;
         } else if (frame_id % 5 == 0) {
-            production_delay = 60;
+            production_delay = 15;
         } else {
-            production_delay = 100;
+            production_delay = 20;
         }
         
         std::this_thread::sleep_for(std::chrono::milliseconds(production_delay));
