@@ -1,5 +1,4 @@
 #include <array>
-#include <semaphore>
 #include <atomic>
 #include <vector>
 #include <thread>
@@ -8,6 +7,9 @@
 #include <random>
 #include <mutex>
 #include <climits>
+#include <semaphore.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 const int BUFFER_SIZE = 10;
 const int NUM_CONSUMERS = 3;
@@ -22,42 +24,42 @@ enum class ConsumerType {
 ConsumerType consumer_types[NUM_CONSUMERS] = {ConsumerType::FAST, ConsumerType::SLOW, ConsumerType::UNSTABLE};
 
 struct Frame {
-    std::byte data[1024];
+    unsigned char data[1024];
     int frame_id;
     std::atomic<int> consumers_processed{0};
 };
 
 std::array<Frame, BUFFER_SIZE> buffer;        
 std::atomic<int> in{0};
-std::atomic<int> out[NUM_CONSUMERS]{0,0,0};
+std::atomic<int> out[NUM_CONSUMERS];
 std::atomic<bool> running{true};
 std::atomic<bool> producer_finished{false};
 std::atomic<int> total_frames_produced{0};
 std::atomic<int> total_frames_consumed{0};
 std::mutex cout_mutex;
 
-std::counting_semaphore<BUFFER_SIZE> empty_slots{BUFFER_SIZE};
-std::counting_semaphore<BUFFER_SIZE> filled_slots_0{0};
-std::counting_semaphore<BUFFER_SIZE> filled_slots_1{0};
-std::counting_semaphore<BUFFER_SIZE> filled_slots_2{0};
-std::counting_semaphore<BUFFER_SIZE>* filled_slots[NUM_CONSUMERS] = {&filled_slots_0, &filled_slots_1, &filled_slots_2};
+sem_t* empty_slots;
+sem_t* filled_slots_0;
+sem_t* filled_slots_1;
+sem_t* filled_slots_2;
+sem_t* filled_slots[NUM_CONSUMERS];
 
 void safe_print(const std::string& message) {
     std::lock_guard<std::mutex> lock(cout_mutex);
     std::cout << message << std::endl;
 }
 
-void generate_frame(std::byte* data) {
+void generate_frame(unsigned char* data) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
     static std::uniform_int_distribution<> dis(0, 255);
     
     for (int i = 0; i < 1024; ++i) {
-        data[i] = static_cast<std::byte>(dis(gen));
+        data[i] = static_cast<unsigned char>(dis(gen));
     }
 }
 
-void process(const std::byte* data, int frame_id, int consumer_id) {
+void process(const unsigned char* data, int frame_id, int consumer_id) {
     static std::random_device rd;
     static std::mt19937 gen(rd());
     int processing_time;
@@ -110,7 +112,7 @@ void producer() {
         }
 
         auto start_time = std::chrono::steady_clock::now();
-        empty_slots.acquire();
+        sem_wait(empty_slots);
         auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time).count();
         
@@ -119,7 +121,7 @@ void producer() {
         }
 
         if (!running) {
-            empty_slots.release();
+            sem_post(empty_slots);
             break;
         }
 
@@ -136,7 +138,7 @@ void producer() {
         in.fetch_add(1);
 
         for (int i = 0; i < NUM_CONSUMERS; ++i) {
-            filled_slots[i]->release();
+            sem_post(filled_slots[i]);
         }
 
         int production_delay;
@@ -166,7 +168,7 @@ bool has_unfinished_frames(int consumer_id) {
     if (current_consumer_position < total_produced) {
         return true;
     }
-
+    
     return false;
 }
 
@@ -183,8 +185,24 @@ void consumer(int id) {
 
     while (running || has_unfinished_frames(id)) {
         auto start_time = std::chrono::steady_clock::now();
-
-        if (!filled_slots[id]->try_acquire_for(std::chrono::milliseconds(100))) {
+        bool acquired = false;
+        auto timeout_start = std::chrono::steady_clock::now();
+        while (!acquired) {
+            if (sem_trywait(filled_slots[id]) == 0) {
+                acquired = true;
+                break;
+            }
+            
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - timeout_start).count();
+            if (elapsed >= 10) {
+                break;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        if (!acquired) {
             if (!running && producer_finished && !has_unfinished_frames(id)) {
                 break;
             }
@@ -193,7 +211,6 @@ void consumer(int id) {
         
         auto wait_time = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time).count();
-        
         if (wait_time > 100) {
             safe_print("Consumer " + std::to_string(id) + " waited " + std::to_string(wait_time) + "ms for work");
         }
@@ -205,7 +222,7 @@ void consumer(int id) {
 
         int processed = buffer[idx].consumers_processed.fetch_add(1) + 1;
         if (processed == NUM_CONSUMERS) {
-            empty_slots.release();
+            sem_post(empty_slots);
             safe_print("All consumers finished frame " + std::to_string(buffer[idx].frame_id) + 
                       " at buffer[" + std::to_string(idx) + "], slot released");
         }
@@ -215,6 +232,38 @@ void consumer(int id) {
 }
 
 int main() {
+    empty_slots = sem_open("empty_slots", O_CREAT | O_EXCL, 0644, BUFFER_SIZE);
+    if (empty_slots == SEM_FAILED) {
+        perror("sem_open empty_slots");
+        return 1;
+    }
+
+    filled_slots_0 = sem_open("filled_slots_0", O_CREAT | O_EXCL, 0644, 0);
+    if (filled_slots_0 == SEM_FAILED) {
+        perror("sem_open filled_slots_0");
+        return 1;
+    }
+
+    filled_slots_1 = sem_open("filled_slots_1", O_CREAT | O_EXCL, 0644, 0);
+    if (filled_slots_1 == SEM_FAILED) {
+        perror("sem_open filled_slots_1");
+        return 1;
+    }
+
+    filled_slots_2 = sem_open("filled_slots_2", O_CREAT | O_EXCL, 0644, 0);
+    if (filled_slots_2 == SEM_FAILED) {
+        perror("sem_open filled_slots_2");
+        return 1;
+    }
+
+    filled_slots[0] = filled_slots_0;
+    filled_slots[1] = filled_slots_1;
+    filled_slots[2] = filled_slots_2;
+
+    for (int i = 0; i < NUM_CONSUMERS; ++i) {
+        out[i].store(0);
+    }
+
     std::thread producer_thread(producer);
     std::vector<std::thread> consumer_threads;
     for (int i = 0; i < NUM_CONSUMERS; ++i) {
@@ -232,6 +281,15 @@ int main() {
         t.join();
     }
     safe_print("All consumers joined successfully");
+
+    sem_close(empty_slots);
+    sem_close(filled_slots_0);
+    sem_close(filled_slots_1);
+    sem_close(filled_slots_2);
+    sem_unlink("empty_slots");
+    sem_unlink("filled_slots_0");
+    sem_unlink("filled_slots_1");
+    sem_unlink("filled_slots_2");
 
     safe_print("Total frames produced: " + std::to_string(total_frames_produced.load()));
     safe_print("Total frames consumed: " + std::to_string(total_frames_consumed.load()));
