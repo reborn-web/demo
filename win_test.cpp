@@ -33,7 +33,7 @@ std::atomic<int> out[NUM_CONSUMERS];
 std::atomic<bool> running{true};
 std::atomic<bool> producer_finished{false};
 std::atomic<int> total_frames_produced{0};
-std::atomic<int> total_frames_consumed{0};
+std::atomic<int> frames_consumed_per_consumer[NUM_CONSUMERS];
 std::mutex cout_mutex;
 
 HANDLE empty_slots;
@@ -65,18 +65,18 @@ void process(const unsigned char* data, int frame_id, int consumer_id) {
     
     switch (consumer_types[consumer_id]) {
         case ConsumerType::FAST:
-            processing_time = std::uniform_int_distribution<>(5, 15)(gen);
+            processing_time = std::uniform_int_distribution<>(3, 5)(gen);
             consumer_type_name = "FAST";
             break;
         case ConsumerType::SLOW:
-            processing_time = std::uniform_int_distribution<>(100, 200)(gen);
+            processing_time = std::uniform_int_distribution<>(10, 20)(gen);
             consumer_type_name = "SLOW";
             break;
         case ConsumerType::UNSTABLE:
-            if (std::uniform_int_distribution<>(0, 1)(gen)) {
-                processing_time = std::uniform_int_distribution<>(5, 20)(gen);
+            if (std::uniform_int_distribution<>(1, 100)(gen) <= 80) {
+                processing_time = std::uniform_int_distribution<>(3, 5)(gen);
             } else {
-                processing_time = std::uniform_int_distribution<>(80, 150)(gen);
+                processing_time = std::uniform_int_distribution<>(10, 20)(gen);
             }
             consumer_type_name = "UNSTABLE";
             break;
@@ -92,8 +92,8 @@ void process(const unsigned char* data, int frame_id, int consumer_id) {
     for (int i = 0; i < 1024; ++i) {
         checksum += static_cast<int>(data[i]);
     }
-    
-    total_frames_consumed.fetch_add(1);
+
+    frames_consumed_per_consumer[consumer_id].fetch_add(1);
     
     safe_print("Consumer " + std::to_string(consumer_id) + " (" + consumer_type_name + 
                ") processed frame " + std::to_string(frame_id) + 
@@ -144,14 +144,7 @@ void producer() {
             ReleaseSemaphore(filled_slots[i], 1, NULL);
         }
 
-        int production_delay;
-        if (frame_id % 10 == 0) {
-            production_delay = 10;
-        } else if (frame_id % 5 == 0) {
-            production_delay = 15;
-        } else {
-            production_delay = 20;
-        }
+        int production_delay = 10;
         
         std::this_thread::sleep_for(std::chrono::milliseconds(production_delay));
     }
@@ -242,6 +235,7 @@ int main() {
 
     for (int i = 0; i < NUM_CONSUMERS; ++i) {
         out[i].store(0);
+        frames_consumed_per_consumer[i].store(0);
     }
 
     std::thread producer_thread(producer);
@@ -263,7 +257,19 @@ int main() {
     safe_print("All consumers joined successfully");
 
     safe_print("Total frames produced: " + std::to_string(total_frames_produced.load()));
-    safe_print("Total frames consumed: " + std::to_string(total_frames_consumed.load()));
+    
+    // Print frames consumed by each consumer
+    for (int i = 0; i < NUM_CONSUMERS; ++i) {
+        std::string type_name;
+        switch (consumer_types[i]) {
+            case ConsumerType::FAST: type_name = "FAST"; break;
+            case ConsumerType::SLOW: type_name = "SLOW"; break;
+            case ConsumerType::UNSTABLE: type_name = "UNSTABLE"; break;
+            default: type_name = "NORMAL"; break;
+        }
+        safe_print("Consumer " + std::to_string(i) + " (" + type_name + ") consumed: " + 
+                  std::to_string(frames_consumed_per_consumer[i].load()) + " frames");
+    }
 
     CloseHandle(empty_slots);
     CloseHandle(filled_slots_0);
